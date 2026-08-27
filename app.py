@@ -1,16 +1,26 @@
 """
-voiceRelay -- live mic voice-over demo.
+voiceRelay -- live mic + music voice-over demo.
 
-Pattern: a broadcaster's browser records short, INDEPENDENTLY-DECODABLE webm/opus
-chunks (each chunk is its own start/stop MediaRecorder session, so it carries its
-own header -- a continuous timesliced recorder would emit headerless continuation
-fragments that decodeAudioData() can't play standalone). Chunks are POSTed to the
-server, which stamps each one with a server-clock timestamp and a fixed-delay
-`play_at` target. Listeners poll for new chunk metadata, fetch the bytes, decode
-them with the Web Audio API, and schedule playback at `play_at` translated into
-their own local clock (via a smoothed server/local clock-offset estimate). Every
-listener scheduling off the same play_at target is what keeps them in sync --
-the fixed delay just has to be bigger than the typical broadcast->listener lag.
+Mixing happens client-side on the broadcaster: mic and an optional local music
+track are combined into one MediaStream via the Web Audio API before encoding,
+so voice and music are in sync by construction (one shared audio clock, no
+separate sync problem). The broadcaster also has a local zero-latency monitor
+tap of that same pre-encode mix -- it never listens to the delayed network path.
+
+Each chunk is its own start/stop MediaRecorder session (self-contained webm
+header, independently decodable -- a continuous timesliced recorder emits
+headerless continuation fragments that decodeAudioData() can't play standalone).
+
+Sync across listeners uses deadline scheduling, the same idea multiplayer-game
+netcode and watch-party tools use for heterogeneous clients: the server just
+timestamps each chunk on receipt (`ts`); each listener independently measures
+its own RTT/jitter and snaps to the smallest of a small shared set of buffer
+tiers (BUFFER_TIERS_MS) it can reliably hit, then schedules playback at
+`ts + tier`. Two listeners on the same tier compute the identical absolute
+playback time and are therefore sample-accurate in sync with each other, even
+though they never talk to each other. A listener whose connection can't hit
+even the largest tier is flagged degraded client-side rather than forcing
+everyone else's delay up to match it.
 
 In-memory only, per room. No auth: this is a demo, not a product.
 """
@@ -27,13 +37,17 @@ CORS(app)
 
 ROOM_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,30}$")
 
-BUFFER_SECONDS = float(os.environ.get("VR_BUFFER_SECONDS", "2.5"))
-MAX_CHUNKS_PER_ROOM = int(os.environ.get("VR_MAX_CHUNKS_PER_ROOM", "40"))
+# Shared buffer tiers, in milliseconds. Listeners snap to the smallest tier
+# their measured RTT + jitter fits inside of. Keep this list small: everyone
+# on the same tier hears the same content at the same instant.
+BUFFER_TIERS_MS = [int(x) for x in os.environ.get("VR_BUFFER_TIERS_MS", "800,1500,3000").split(",")]
+
+MAX_CHUNKS_PER_ROOM = int(os.environ.get("VR_MAX_CHUNKS_PER_ROOM", "60"))
 ROOM_STALE_SECS = int(os.environ.get("VR_ROOM_STALE_SECS", "20"))
 ROOM_REAP_SECS = int(os.environ.get("VR_ROOM_REAP_SECS", "600"))   # drop the room entirely after this long silent
 MAX_CHUNK_BYTES = int(os.environ.get("VR_MAX_CHUNK_BYTES", str(512 * 1024)))
 
-rooms = {}              # room -> {chunks: {seq: {seq, ts, play_at, size, data}}, seq_counter, last_seen, total_chunks}
+rooms = {}              # room -> {chunks: {seq: {seq, ts, size, data}}, seq_counter, last_seen, total_chunks}
 rooms_lock = threading.Lock()
 
 
@@ -81,21 +95,21 @@ def broadcast_chunk(room):
         r["seq_counter"] += 1
         r["total_chunks"] += 1
         r["last_seen"] = now
-        play_at = now + BUFFER_SECONDS
-        r["chunks"][seq] = {"seq": seq, "ts": now, "play_at": play_at, "size": len(data), "data": data}
+        r["chunks"][seq] = {"seq": seq, "ts": now, "size": len(data), "data": data}
         while len(r["chunks"]) > MAX_CHUNKS_PER_ROOM:
             oldest = next(iter(r["chunks"]))
             del r["chunks"][oldest]
 
-    return jsonify({"status": "success", "seq": seq, "server_time_now": now,
-                    "play_at": play_at, "buffer_seconds": BUFFER_SECONDS})
+    return jsonify({"status": "success", "seq": seq, "server_time_now": now})
 
 
 @app.route("/api/voice/stream/<room>", methods=["GET"])
 def stream_room(room):
     """Chunk metadata newer than ?after=<seq> (bytes fetched separately, see /chunk).
     ?bootstrap=1 returns no chunks, just latest_seq -- lets a joining listener skip
-    the backlog and start live instead of rapid-firing everything already buffered."""
+    the backlog and start live instead of rapid-firing everything already buffered.
+    Also doubles as the RTT-measurement request: the caller times this round trip
+    and reads server_time_now to estimate clock offset and jitter."""
     rid = _room_id(room)
     if not rid:
         return jsonify({"status": "error", "message": "Bad room id."}), 400
@@ -113,12 +127,12 @@ def stream_room(room):
             return jsonify({"status": "error", "message": "Room is offline (no live broadcaster)."}), 404
         latest_seq = max(r["chunks"]) if r["chunks"] else after
         chunks = [] if bootstrap else [
-            {"seq": c["seq"], "ts": c["ts"], "play_at": c["play_at"], "size": c["size"]}
+            {"seq": c["seq"], "ts": c["ts"], "size": c["size"]}
             for c in r["chunks"].values() if c["seq"] > after
         ]
 
     return jsonify({"status": "success", "room": rid, "server_time_now": now,
-                    "buffer_seconds": BUFFER_SECONDS, "latest_seq": latest_seq, "chunks": chunks})
+                    "tiers_ms": BUFFER_TIERS_MS, "latest_seq": latest_seq, "chunks": chunks})
 
 
 @app.route("/api/voice/chunk/<room>/<int:seq>", methods=["GET"])
@@ -146,7 +160,7 @@ def list_rooms():
                 "age_seconds": round(now - r["last_seen"], 1), "total_chunks": r["total_chunks"]}
                for rid, r in rooms.items()]
     out.sort(key=lambda x: (-x["live"], x["room"]))
-    return jsonify({"status": "success", "rooms": out, "buffer_seconds": BUFFER_SECONDS})
+    return jsonify({"status": "success", "rooms": out, "tiers_ms": BUFFER_TIERS_MS})
 
 
 @app.route("/api/diag", methods=["GET"])
@@ -156,7 +170,7 @@ def diag():
         room_count = len(rooms)
         live_count = sum(1 for r in rooms.values() if now - r["last_seen"] <= ROOM_STALE_SECS)
     return jsonify({"service": "voiceRelay", "server_time": now, "rooms": room_count,
-                    "live_rooms": live_count, "buffer_seconds": BUFFER_SECONDS,
+                    "live_rooms": live_count, "tiers_ms": BUFFER_TIERS_MS,
                     "max_chunks_per_room": MAX_CHUNKS_PER_ROOM})
 
 

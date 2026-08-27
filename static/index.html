@@ -4,10 +4,10 @@
 <meta charset="UTF-8">
 <title>Voice Relay -- Live Demo</title>
 <style>
-  :root { --bg: #121212; --card: #1e1e1e; --accent: #1db954; --text: #ffffff; --muted: #999999; --danger: #e5484d; }
+  :root { --bg: #121212; --card: #1e1e1e; --accent: #1db954; --text: #ffffff; --muted: #999999; --danger: #e5484d; --warn: #fbbf24; }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-  .card { position: relative; width: 420px; background: var(--card); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.6); padding: 20px; }
+  .card { position: relative; width: 440px; background: var(--card); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.6); padding: 20px; }
   h1 { font-size: 16px; margin: 0 0 2px 0; }
   .sub { font-size: 11px; color: var(--muted); margin: 0 0 16px 0; }
 
@@ -19,14 +19,13 @@
   .mode-btn { flex: 1; padding: 8px 0; text-align: center; font-size: 12px; font-weight: 600; background: transparent; color: var(--muted); border: none; cursor: pointer; }
   .mode-btn.active { background: var(--accent); color: #000; }
 
-  .panel { position: relative; min-height: 150px; }
   .panel-inner { display: none; }
   .panel-inner.active { display: block; }
 
   .status-row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; height: 20px; }
   .dot { position: relative; width: 9px; height: 9px; border-radius: 50%; background: #555; flex-shrink: 0; }
   .dot.live { background: var(--accent); animation: pulse 1.4s infinite; }
-  .dot.warn { background: #fbbf24; }
+  .dot.warn { background: var(--warn); }
   @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(29,185,84,0.6); } 70% { box-shadow: 0 0 0 6px rgba(29,185,84,0); } 100% { box-shadow: 0 0 0 0 rgba(29,185,84,0); } }
   .status-text { font-size: 12px; color: var(--muted); }
 
@@ -34,12 +33,20 @@
   .big-btn.stop { background: var(--danger); }
   .big-btn:disabled { opacity: 0.4; cursor: default; }
 
+  .section-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 16px 0 8px 0; }
+
+  .row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .row span.lbl { font-size: 11px; color: var(--muted); width: 62px; flex-shrink: 0; }
+  .row input[type=range] { flex: 1; }
+  .row input[type=file] { flex: 1; font-size: 11px; color: var(--muted); }
+
+  .small-btn { padding: 6px 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.06); color: var(--text); font-size: 11px; cursor: pointer; }
+  .small-btn.on { background: var(--accent); color: #000; border-color: var(--accent); }
+  .small-btn:disabled { opacity: 0.35; cursor: default; }
+
   .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; font-size: 11px; color: var(--muted); }
   .stat-grid b { color: var(--text); font-size: 13px; display: block; }
-
-  .vol-row { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
-  .vol-row span { font-size: 11px; color: var(--muted); width: 46px; }
-  .vol-row input[type=range] { flex: 1; }
+  .stat-grid b.degraded { color: var(--warn); }
 
   .footnote { margin-top: 16px; font-size: 10px; color: #666; line-height: 1.4; }
 </style>
@@ -48,7 +55,7 @@
 
 <div class="card">
   <h1>Voice Relay</h1>
-  <p class="sub">Live mic broadcast, fixed-delay synced playback -- demo</p>
+  <p class="sub">Live mic + music, synced across listeners -- demo</p>
 
   <div class="room-row">
     <input id="room-input" value="demo" maxlength="30" spellcheck="false">
@@ -59,44 +66,62 @@
     <button class="mode-btn" id="tab-listen" onclick="setMode('listen')">Listen</button>
   </div>
 
-  <div class="panel">
+  <div class="panel-inner active" id="panel-broadcast">
+    <div class="status-row">
+      <div class="dot" id="bc-dot"></div>
+      <div class="status-text" id="bc-status">Idle -- mic not started</div>
+    </div>
+    <button class="big-btn" id="bc-btn" onclick="toggleBroadcast()">Start Broadcasting</button>
 
-    <div class="panel-inner active" id="panel-broadcast">
-      <div class="status-row">
-        <div class="dot" id="bc-dot"></div>
-        <div class="status-text" id="bc-status">Idle -- mic not started</div>
-      </div>
-      <button class="big-btn" id="bc-btn" onclick="toggleBroadcast()">Start Broadcasting</button>
-      <div class="stat-grid">
-        <div>Chunks sent<b id="bc-sent">0</b></div>
-        <div>Last chunk<b id="bc-size">--</b></div>
-      </div>
+    <div class="section-label">Monitor (what you hear -- local, zero delay)</div>
+    <div class="row">
+      <button class="small-btn" id="monitor-btn" onclick="toggleMonitor()" disabled>Monitor: Off</button>
+      <span style="font-size:10px; color:#666;">use headphones to avoid feedback</span>
     </div>
 
-    <div class="panel-inner" id="panel-listen">
-      <div class="status-row">
-        <div class="dot" id="ls-dot"></div>
-        <div class="status-text" id="ls-status">Idle</div>
-      </div>
-      <button class="big-btn" id="ls-btn" onclick="toggleListen()">Start Listening</button>
-      <div class="stat-grid">
-        <div>Target delay<b id="ls-delay">--</b></div>
-        <div>Clock offset<b id="ls-offset">--</b></div>
-      </div>
-      <div class="vol-row">
-        <span>Volume</span>
-        <input type="range" id="ls-vol" min="0" max="100" value="100" oninput="setVolume(this.value)">
-      </div>
+    <div class="section-label">Music bed</div>
+    <div class="row">
+      <input type="file" id="music-file" accept="audio/*" onchange="loadMusic(this.files[0])">
+      <button class="small-btn" id="music-play-btn" onclick="toggleMusic()" disabled>Play</button>
+    </div>
+    <div class="row">
+      <span class="lbl">Mic</span>
+      <input type="range" id="mic-vol" min="0" max="150" value="100" oninput="setMicGain(this.value)">
+    </div>
+    <div class="row">
+      <span class="lbl">Music</span>
+      <input type="range" id="music-vol" min="0" max="150" value="60" oninput="setMusicGain(this.value)">
     </div>
 
+    <div class="stat-grid">
+      <div>Chunks sent<b id="bc-sent">0</b></div>
+      <div>Last chunk<b id="bc-size">--</b></div>
+    </div>
   </div>
 
-  <p class="footnote">Chrome or Firefox recommended (needs MediaRecorder opus + Web Audio decodeAudioData). Each listener buffers a fixed delay behind the broadcaster and schedules playback off a shared server clock, so multiple listeners stay roughly in sync with each other even though the delay isn't zero.</p>
+  <div class="panel-inner" id="panel-listen">
+    <div class="status-row">
+      <div class="dot" id="ls-dot"></div>
+      <div class="status-text" id="ls-status">Idle</div>
+    </div>
+    <button class="big-btn" id="ls-btn" onclick="toggleListen()">Start Listening</button>
+    <div class="stat-grid">
+      <div>Sync tier<b id="ls-tier">--</b></div>
+      <div>Measured RTT<b id="ls-rtt">--</b></div>
+    </div>
+    <div class="row">
+      <span class="lbl">Volume</span>
+      <input type="range" id="ls-vol" min="0" max="100" value="100" oninput="setVolume(this.value)">
+    </div>
+  </div>
+
+  <p class="footnote" id="footnote-broadcast">Chrome or Firefox recommended. Mic and music are mixed together in your browser before sending, so they're always in sync in the outgoing stream -- there's nothing to keep in sync server-side. The Monitor tap is local audio routing (not a round trip), so it stays essentially instant even while listeners are hearing you a second or more behind.</p>
+  <p class="footnote" id="footnote-listen" style="display:none;">On connect, this measures round-trip time to the server 3x and snaps to the smallest shared buffer tier your connection can reliably hit. Everyone who lands on the same tier hears identical content at the identical instant, computed independently -- no coordination between listeners needed. A very slow connection will land on the largest tier and get flagged "degraded" rather than dragging everyone else's delay up.</p>
 </div>
 
 <script>
-const CHUNK_MS = 500;
-const POLL_MS = 300;
+const CHUNK_MS = 200;   // recorder chunk length -- lower = less latency, more per-chunk header overhead
+const POLL_MS = 150;    // listener poll interval once a tier is chosen
 
 function roomId() { return (document.getElementById('room-input').value || 'demo').trim().toLowerCase(); }
 
@@ -105,10 +130,16 @@ function setMode(mode) {
   document.getElementById('tab-listen').classList.toggle('active', mode === 'listen');
   document.getElementById('panel-broadcast').classList.toggle('active', mode === 'broadcast');
   document.getElementById('panel-listen').classList.toggle('active', mode === 'listen');
+  document.getElementById('footnote-broadcast').style.display = mode === 'broadcast' ? 'block' : 'none';
+  document.getElementById('footnote-listen').style.display = mode === 'listen' ? 'block' : 'none';
 }
 
-// ---------------- Broadcast ----------------
-let bcStream = null, bcRecording = false, bcSent = 0;
+// ---------------- Broadcast: mic + music mix, local monitor, chunked upload ----------------
+let bcAudioCtx = null, micStream = null, micSource = null, micGain = null;
+let musicEl = null, musicSource = null, musicGain = null, musicLoaded = false, musicPlaying = false;
+let monitorGain = null, monitoring = false;
+let mixDest = null;
+let bcRecording = false, bcSent = 0;
 
 function setBcStatus(text, cls) {
   document.getElementById('bc-status').textContent = text;
@@ -117,34 +148,101 @@ function setBcStatus(text, cls) {
 
 async function toggleBroadcast() {
   if (bcRecording) { stopBroadcast(); return; }
+
   try {
-    bcStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (e) {
     setBcStatus('Mic permission denied', 'warn');
     return;
   }
+
+  bcAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  micSource = bcAudioCtx.createMediaStreamSource(micStream);
+  micGain = bcAudioCtx.createGain();
+  micGain.gain.value = document.getElementById('mic-vol').value / 100;
+  monitorGain = bcAudioCtx.createGain();  // silent until Monitor is toggled on
+  monitorGain.gain.value = 0;
+  mixDest = bcAudioCtx.createMediaStreamDestination();
+
+  micSource.connect(micGain);
+  micGain.connect(mixDest);
+  micGain.connect(monitorGain);
+  monitorGain.connect(bcAudioCtx.destination);
+
+  // if a music track was already loaded before broadcasting started, wire it in now
+  if (musicLoaded) connectMusicGraph();
+
   bcRecording = true;
   bcSent = 0;
   document.getElementById('bc-sent').textContent = '0';
   document.getElementById('bc-btn').textContent = 'Stop Broadcasting';
   document.getElementById('bc-btn').classList.add('stop');
+  document.getElementById('monitor-btn').disabled = false;
   setBcStatus('Live -- room "' + roomId() + '"', 'live');
   recordLoop();
 }
 
 function stopBroadcast() {
   bcRecording = false;
-  if (bcStream) { bcStream.getTracks().forEach(t => t.stop()); bcStream = null; }
+  if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+  if (musicEl) { musicEl.pause(); musicPlaying = false; document.getElementById('music-play-btn').textContent = 'Play'; }
+  if (bcAudioCtx) { bcAudioCtx.close(); bcAudioCtx = null; }
+  monitoring = false;
+  document.getElementById('monitor-btn').textContent = 'Monitor: Off';
+  document.getElementById('monitor-btn').classList.remove('on');
+  document.getElementById('monitor-btn').disabled = true;
   document.getElementById('bc-btn').textContent = 'Start Broadcasting';
   document.getElementById('bc-btn').classList.remove('stop');
   setBcStatus('Idle -- mic not started');
 }
 
+function toggleMonitor() {
+  if (!monitorGain) return;
+  monitoring = !monitoring;
+  monitorGain.gain.value = monitoring ? 1 : 0;
+  document.getElementById('monitor-btn').textContent = 'Monitor: ' + (monitoring ? 'On' : 'Off');
+  document.getElementById('monitor-btn').classList.toggle('on', monitoring);
+}
+
+function setMicGain(v) { if (micGain) micGain.gain.value = v / 100; }
+function setMusicGain(v) { if (musicGain) musicGain.gain.value = v / 100; }
+
+function loadMusic(file) {
+  if (!file) return;
+  if (!musicEl) {
+    musicEl = new Audio();
+    musicEl.loop = true;
+  }
+  musicEl.src = URL.createObjectURL(file);
+  musicLoaded = true;
+  document.getElementById('music-play-btn').disabled = false;
+  if (bcAudioCtx) connectMusicGraph();
+}
+
+function connectMusicGraph() {
+  // createMediaElementSource can only be called once per element, so guard it
+  if (!musicSource) {
+    musicSource = bcAudioCtx.createMediaElementSource(musicEl);
+    musicGain = bcAudioCtx.createGain();
+    musicGain.gain.value = document.getElementById('music-vol').value / 100;
+    musicSource.connect(musicGain);
+    musicGain.connect(mixDest);
+    musicGain.connect(monitorGain);
+  }
+}
+
+function toggleMusic() {
+  if (!musicEl) return;
+  if (bcAudioCtx && bcAudioCtx.state === 'suspended') bcAudioCtx.resume();
+  if (musicPlaying) { musicEl.pause(); musicPlaying = false; document.getElementById('music-play-btn').textContent = 'Play'; }
+  else { musicEl.play(); musicPlaying = true; document.getElementById('music-play-btn').textContent = 'Pause'; }
+}
+
 function recordLoop() {
-  if (!bcRecording || !bcStream) return;
+  if (!bcRecording || !mixDest) return;
   let mr;
   try {
-    mr = new MediaRecorder(bcStream, { mimeType: 'audio/webm;codecs=opus' });
+    mr = new MediaRecorder(mixDest.stream, { mimeType: 'audio/webm;codecs=opus' });
   } catch (e) {
     setBcStatus('MediaRecorder unsupported in this browser', 'warn');
     stopBroadcast();
@@ -176,28 +274,65 @@ async function sendChunk(blob) {
   } catch (e) { /* dropped chunk, next one will follow shortly */ }
 }
 
-// ---------------- Listen ----------------
+// ---------------- Listen: RTT-measured tier selection + deadline-scheduled playback ----------------
 let audioCtx = null, gainNode = null, listening = false, pollTimer = null;
-let lastSeq = -1, clockOffset = null, bootstrapped = false;
+let lastSeq = -1, clockOffsetMs = null, chosenTierMs = null;
 
 function setLsStatus(text, cls) {
   document.getElementById('ls-status').textContent = text;
   document.getElementById('ls-dot').className = 'dot' + (cls ? ' ' + cls : '');
 }
 
-function toggleListen() {
+// One timed round trip to the (lightweight, bootstrap) stream endpoint.
+// Returns rtt, an NTP-style offset estimate (assumes roughly symmetric latency),
+// and the server payload.
+async function timedBootstrapFetch() {
+  const t0 = Date.now();
+  const res = await fetch('/api/voice/stream/' + roomId() + '?after=-1&bootstrap=1');
+  const t1 = Date.now();
+  const data = await res.json();
+  const rtt = t1 - t0;
+  const offsetMs = (data.server_time_now * 1000 + rtt / 2) - t1;
+  return { ok: data.status === 'success', rtt, offsetMs, data };
+}
+
+async function toggleListen() {
   if (listening) { stopListen(); return; }
+
+  setLsStatus('Measuring connection...', 'warn');
+  const samples = [];
+  let lastData = null;
+  for (let i = 0; i < 3; i++) {
+    const r = await timedBootstrapFetch();
+    if (!r.ok) { setLsStatus(r.data.message || 'Room offline', 'warn'); return; }
+    samples.push(r);
+    lastData = r.data;
+    if (i < 2) await new Promise(res => setTimeout(res, 120));
+  }
+
+  const tiers = lastData.tiers_ms;
+  const maxRtt = Math.max(...samples.map(s => s.rtt));
+  clockOffsetMs = samples.reduce((a, s) => a + s.offsetMs, 0) / samples.length;
+  const margin = maxRtt + CHUNK_MS + POLL_MS + 150; // chunk latency + poll granularity + safety
+  let tier = tiers.find(t => t >= margin);
+  let degraded = false;
+  if (!tier) { tier = tiers[tiers.length - 1]; degraded = true; }
+  chosenTierMs = tier;
+  lastSeq = lastData.latest_seq;
+
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   gainNode = audioCtx.createGain();
   gainNode.gain.value = document.getElementById('ls-vol').value / 100;
   gainNode.connect(audioCtx.destination);
+
+  document.getElementById('ls-tier').textContent = (tier / 1000).toFixed(1) + ' s';
+  document.getElementById('ls-tier').className = degraded ? 'degraded' : '';
+  document.getElementById('ls-rtt').textContent = Math.round(maxRtt) + ' ms';
+
   listening = true;
-  lastSeq = -1;
-  clockOffset = null;
-  bootstrapped = false;
   document.getElementById('ls-btn').textContent = 'Stop Listening';
   document.getElementById('ls-btn').classList.add('stop');
-  setLsStatus('Connecting...', 'warn');
+  setLsStatus(degraded ? 'Live -- your connection is slow, sync not guaranteed' : 'Live -- buffering...', degraded ? 'warn' : 'live');
   pollLoop();
 }
 
@@ -207,6 +342,8 @@ function stopListen() {
   if (audioCtx) { audioCtx.close(); audioCtx = null; }
   document.getElementById('ls-btn').textContent = 'Start Listening';
   document.getElementById('ls-btn').classList.remove('stop');
+  document.getElementById('ls-tier').textContent = '--';
+  document.getElementById('ls-rtt').textContent = '--';
   setLsStatus('Idle');
 }
 
@@ -215,27 +352,20 @@ function setVolume(v) { if (gainNode) gainNode.gain.value = v / 100; }
 async function pollLoop() {
   if (!listening) return;
   try {
-    const url = '/api/voice/stream/' + roomId() + '?after=' + lastSeq + (bootstrapped ? '' : '&bootstrap=1');
-    const res = await fetch(url);
+    const t0 = Date.now();
+    const res = await fetch('/api/voice/stream/' + roomId() + '?after=' + lastSeq);
+    const t1 = Date.now();
     const data = await res.json();
     if (data.status === 'success') {
-      const localNow = Date.now() / 1000;
-      const measured = data.server_time_now - localNow;
-      clockOffset = (clockOffset === null) ? measured : (clockOffset * 0.8 + measured * 0.2);
-      document.getElementById('ls-offset').textContent = (clockOffset * 1000).toFixed(0) + ' ms';
-      document.getElementById('ls-delay').textContent = data.buffer_seconds.toFixed(1) + ' s';
-
-      if (!bootstrapped) {
-        lastSeq = data.latest_seq;
-        bootstrapped = true;
-        setLsStatus('Live -- buffering...', 'live');
-      } else if (data.chunks.length) {
+      const rtt = t1 - t0;
+      const measuredOffset = (data.server_time_now * 1000 + rtt / 2) - t1;
+      clockOffsetMs = clockOffsetMs * 0.8 + measuredOffset * 0.2;
+      if (data.chunks.length) {
         for (const c of data.chunks) { scheduleChunk(c); lastSeq = c.seq; }
         setLsStatus('Live -- room "' + roomId() + '"', 'live');
       }
     } else {
       setLsStatus(data.message || 'Room offline', 'warn');
-      bootstrapped = false;
     }
   } catch (e) {
     setLsStatus('Connection error', 'warn');
@@ -248,12 +378,13 @@ async function scheduleChunk(c) {
     const res = await fetch('/api/voice/chunk/' + roomId() + '/' + c.seq);
     const buf = await res.arrayBuffer();
     const audioBuffer = await audioCtx.decodeAudioData(buf);
-    const targetLocal = c.play_at - clockOffset;
-    const delay = targetLocal - Date.now() / 1000;
+    const targetServerMs = c.ts * 1000 + chosenTierMs;
+    const targetLocalMs = targetServerMs - clockOffsetMs;
+    const delaySec = (targetLocalMs - Date.now()) / 1000;
     const src = audioCtx.createBufferSource();
     src.buffer = audioBuffer;
     src.connect(gainNode);
-    src.start(audioCtx.currentTime + Math.max(delay, 0.02));
+    src.start(audioCtx.currentTime + Math.max(delaySec, 0.02));
   } catch (e) {
     // a chunk that fails to decode or arrives too late is simply dropped
   }
