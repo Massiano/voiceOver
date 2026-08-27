@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Voice Relay -- Live Demo</title>
+<style>
+  :root { --bg: #121212; --card: #1e1e1e; --accent: #1db954; --text: #ffffff; --muted: #999999; --danger: #e5484d; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+  .card { position: relative; width: 420px; background: var(--card); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.6); padding: 20px; }
+  h1 { font-size: 16px; margin: 0 0 2px 0; }
+  .sub { font-size: 11px; color: var(--muted); margin: 0 0 16px 0; }
+
+  .room-row { display: flex; gap: 8px; margin-bottom: 16px; }
+  .room-row input { flex: 1; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; color: var(--text); padding: 8px 10px; font-size: 13px; outline: none; }
+  .room-row input:focus { border-color: var(--accent); }
+
+  .mode-toggle { display: flex; border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; overflow: hidden; margin-bottom: 16px; }
+  .mode-btn { flex: 1; padding: 8px 0; text-align: center; font-size: 12px; font-weight: 600; background: transparent; color: var(--muted); border: none; cursor: pointer; }
+  .mode-btn.active { background: var(--accent); color: #000; }
+
+  .panel { position: relative; min-height: 150px; }
+  .panel-inner { display: none; }
+  .panel-inner.active { display: block; }
+
+  .status-row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; height: 20px; }
+  .dot { position: relative; width: 9px; height: 9px; border-radius: 50%; background: #555; flex-shrink: 0; }
+  .dot.live { background: var(--accent); animation: pulse 1.4s infinite; }
+  .dot.warn { background: #fbbf24; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(29,185,84,0.6); } 70% { box-shadow: 0 0 0 6px rgba(29,185,84,0); } 100% { box-shadow: 0 0 0 0 rgba(29,185,84,0); } }
+  .status-text { font-size: 12px; color: var(--muted); }
+
+  .big-btn { width: 100%; padding: 12px 0; border-radius: 8px; border: none; font-size: 13px; font-weight: 700; cursor: pointer; color: #fff; background: var(--accent); }
+  .big-btn.stop { background: var(--danger); }
+  .big-btn:disabled { opacity: 0.4; cursor: default; }
+
+  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; font-size: 11px; color: var(--muted); }
+  .stat-grid b { color: var(--text); font-size: 13px; display: block; }
+
+  .vol-row { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+  .vol-row span { font-size: 11px; color: var(--muted); width: 46px; }
+  .vol-row input[type=range] { flex: 1; }
+
+  .footnote { margin-top: 16px; font-size: 10px; color: #666; line-height: 1.4; }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <h1>Voice Relay</h1>
+  <p class="sub">Live mic broadcast, fixed-delay synced playback -- demo</p>
+
+  <div class="room-row">
+    <input id="room-input" value="demo" maxlength="30" spellcheck="false">
+  </div>
+
+  <div class="mode-toggle">
+    <button class="mode-btn active" id="tab-broadcast" onclick="setMode('broadcast')">Broadcast</button>
+    <button class="mode-btn" id="tab-listen" onclick="setMode('listen')">Listen</button>
+  </div>
+
+  <div class="panel">
+
+    <div class="panel-inner active" id="panel-broadcast">
+      <div class="status-row">
+        <div class="dot" id="bc-dot"></div>
+        <div class="status-text" id="bc-status">Idle -- mic not started</div>
+      </div>
+      <button class="big-btn" id="bc-btn" onclick="toggleBroadcast()">Start Broadcasting</button>
+      <div class="stat-grid">
+        <div>Chunks sent<b id="bc-sent">0</b></div>
+        <div>Last chunk<b id="bc-size">--</b></div>
+      </div>
+    </div>
+
+    <div class="panel-inner" id="panel-listen">
+      <div class="status-row">
+        <div class="dot" id="ls-dot"></div>
+        <div class="status-text" id="ls-status">Idle</div>
+      </div>
+      <button class="big-btn" id="ls-btn" onclick="toggleListen()">Start Listening</button>
+      <div class="stat-grid">
+        <div>Target delay<b id="ls-delay">--</b></div>
+        <div>Clock offset<b id="ls-offset">--</b></div>
+      </div>
+      <div class="vol-row">
+        <span>Volume</span>
+        <input type="range" id="ls-vol" min="0" max="100" value="100" oninput="setVolume(this.value)">
+      </div>
+    </div>
+
+  </div>
+
+  <p class="footnote">Chrome or Firefox recommended (needs MediaRecorder opus + Web Audio decodeAudioData). Each listener buffers a fixed delay behind the broadcaster and schedules playback off a shared server clock, so multiple listeners stay roughly in sync with each other even though the delay isn't zero.</p>
+</div>
+
+<script>
+const CHUNK_MS = 500;
+const POLL_MS = 300;
+
+function roomId() { return (document.getElementById('room-input').value || 'demo').trim().toLowerCase(); }
+
+function setMode(mode) {
+  document.getElementById('tab-broadcast').classList.toggle('active', mode === 'broadcast');
+  document.getElementById('tab-listen').classList.toggle('active', mode === 'listen');
+  document.getElementById('panel-broadcast').classList.toggle('active', mode === 'broadcast');
+  document.getElementById('panel-listen').classList.toggle('active', mode === 'listen');
+}
+
+// ---------------- Broadcast ----------------
+let bcStream = null, bcRecording = false, bcSent = 0;
+
+function setBcStatus(text, cls) {
+  document.getElementById('bc-status').textContent = text;
+  document.getElementById('bc-dot').className = 'dot' + (cls ? ' ' + cls : '');
+}
+
+async function toggleBroadcast() {
+  if (bcRecording) { stopBroadcast(); return; }
+  try {
+    bcStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    setBcStatus('Mic permission denied', 'warn');
+    return;
+  }
+  bcRecording = true;
+  bcSent = 0;
+  document.getElementById('bc-sent').textContent = '0';
+  document.getElementById('bc-btn').textContent = 'Stop Broadcasting';
+  document.getElementById('bc-btn').classList.add('stop');
+  setBcStatus('Live -- room "' + roomId() + '"', 'live');
+  recordLoop();
+}
+
+function stopBroadcast() {
+  bcRecording = false;
+  if (bcStream) { bcStream.getTracks().forEach(t => t.stop()); bcStream = null; }
+  document.getElementById('bc-btn').textContent = 'Start Broadcasting';
+  document.getElementById('bc-btn').classList.remove('stop');
+  setBcStatus('Idle -- mic not started');
+}
+
+function recordLoop() {
+  if (!bcRecording || !bcStream) return;
+  let mr;
+  try {
+    mr = new MediaRecorder(bcStream, { mimeType: 'audio/webm;codecs=opus' });
+  } catch (e) {
+    setBcStatus('MediaRecorder unsupported in this browser', 'warn');
+    stopBroadcast();
+    return;
+  }
+  const parts = [];
+  mr.ondataavailable = e => { if (e.data && e.data.size > 0) parts.push(e.data); };
+  mr.onstop = async () => {
+    if (parts.length) {
+      const blob = new Blob(parts, { type: 'audio/webm' });
+      await sendChunk(blob);
+    }
+    if (bcRecording) recordLoop();
+  };
+  mr.start();
+  setTimeout(() => { if (mr.state !== 'inactive') mr.stop(); }, CHUNK_MS);
+}
+
+async function sendChunk(blob) {
+  const fd = new FormData();
+  fd.append('chunk', blob, 'chunk.webm');
+  try {
+    const res = await fetch('/api/voice/broadcast/' + roomId(), { method: 'POST', body: fd });
+    if (res.ok) {
+      bcSent++;
+      document.getElementById('bc-sent').textContent = String(bcSent);
+      document.getElementById('bc-size').textContent = blob.size + ' B';
+    }
+  } catch (e) { /* dropped chunk, next one will follow shortly */ }
+}
+
+// ---------------- Listen ----------------
+let audioCtx = null, gainNode = null, listening = false, pollTimer = null;
+let lastSeq = -1, clockOffset = null, bootstrapped = false;
+
+function setLsStatus(text, cls) {
+  document.getElementById('ls-status').textContent = text;
+  document.getElementById('ls-dot').className = 'dot' + (cls ? ' ' + cls : '');
+}
+
+function toggleListen() {
+  if (listening) { stopListen(); return; }
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  gainNode = audioCtx.createGain();
+  gainNode.gain.value = document.getElementById('ls-vol').value / 100;
+  gainNode.connect(audioCtx.destination);
+  listening = true;
+  lastSeq = -1;
+  clockOffset = null;
+  bootstrapped = false;
+  document.getElementById('ls-btn').textContent = 'Stop Listening';
+  document.getElementById('ls-btn').classList.add('stop');
+  setLsStatus('Connecting...', 'warn');
+  pollLoop();
+}
+
+function stopListen() {
+  listening = false;
+  if (pollTimer) clearTimeout(pollTimer);
+  if (audioCtx) { audioCtx.close(); audioCtx = null; }
+  document.getElementById('ls-btn').textContent = 'Start Listening';
+  document.getElementById('ls-btn').classList.remove('stop');
+  setLsStatus('Idle');
+}
+
+function setVolume(v) { if (gainNode) gainNode.gain.value = v / 100; }
+
+async function pollLoop() {
+  if (!listening) return;
+  try {
+    const url = '/api/voice/stream/' + roomId() + '?after=' + lastSeq + (bootstrapped ? '' : '&bootstrap=1');
+    const res = await fetch(url);
+    const data = await res.json();
+    if (data.status === 'success') {
+      const localNow = Date.now() / 1000;
+      const measured = data.server_time_now - localNow;
+      clockOffset = (clockOffset === null) ? measured : (clockOffset * 0.8 + measured * 0.2);
+      document.getElementById('ls-offset').textContent = (clockOffset * 1000).toFixed(0) + ' ms';
+      document.getElementById('ls-delay').textContent = data.buffer_seconds.toFixed(1) + ' s';
+
+      if (!bootstrapped) {
+        lastSeq = data.latest_seq;
+        bootstrapped = true;
+        setLsStatus('Live -- buffering...', 'live');
+      } else if (data.chunks.length) {
+        for (const c of data.chunks) { scheduleChunk(c); lastSeq = c.seq; }
+        setLsStatus('Live -- room "' + roomId() + '"', 'live');
+      }
+    } else {
+      setLsStatus(data.message || 'Room offline', 'warn');
+      bootstrapped = false;
+    }
+  } catch (e) {
+    setLsStatus('Connection error', 'warn');
+  }
+  pollTimer = setTimeout(pollLoop, POLL_MS);
+}
+
+async function scheduleChunk(c) {
+  try {
+    const res = await fetch('/api/voice/chunk/' + roomId() + '/' + c.seq);
+    const buf = await res.arrayBuffer();
+    const audioBuffer = await audioCtx.decodeAudioData(buf);
+    const targetLocal = c.play_at - clockOffset;
+    const delay = targetLocal - Date.now() / 1000;
+    const src = audioCtx.createBufferSource();
+    src.buffer = audioBuffer;
+    src.connect(gainNode);
+    src.start(audioCtx.currentTime + Math.max(delay, 0.02));
+  } catch (e) {
+    // a chunk that fails to decode or arrives too late is simply dropped
+  }
+}
+</script>
+
+</body>
+</html>
